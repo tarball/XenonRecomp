@@ -315,11 +315,13 @@ Image Xex2LoadImage(const uint8_t* data, size_t dataSize)
             static std::unordered_map<size_t, const char*> DummyExports;
             const std::unordered_map<size_t, const char*>* names = &DummyExports;
 
-            if (stringTable[i] == "xam.xex")
+            // Each library header names its own string table entry; don't assume the two are in the same order.
+            const auto& libraryName = stringTable[library->name < stringTable.size() ? library->name.get() : i];
+            if (libraryName == "xam.xex")
             {
                 names = &XamExports;
             }
-            else if (stringTable[i] == "xboxkrnl.exe")
+            else if (libraryName == "xboxkrnl.exe")
             {
                 names = &XboxKernelExports;
             }
@@ -342,7 +344,8 @@ Image Xex2LoadImage(const uint8_t* data, size_t dataSize)
                     memcpy(originalThunk, thunk, sizeof(thunk));
                 }
             }
-            library = (Xex2ImportLibrary*)((char*)(library + 1) + library->numberOfImports * sizeof(Xex2ImportDescriptor));
+            // Advance by the library's own size: early XDK executables pad library entries past their import records.
+            library = (Xex2ImportLibrary*)((char*)library + library->size);
         }
     }
 

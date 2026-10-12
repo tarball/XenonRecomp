@@ -400,6 +400,7 @@ bool Recompiler::Recompile(
                 else
                 {
                     println("\t// ERROR {:X}", address);
+                    fmt::println("ERROR: Branch at {:X} targets {:X}, which is not a function start", base, address);
                 }
             }
         };
@@ -617,8 +618,18 @@ bool Recompiler::Recompile(
                 auto label = switchTable->second.labels[i];
                 if (label < fn.base || label >= fn.base + fn.size)
                 {
-                    println("\t\t// ERROR: 0x{:X}", label);
-                    fmt::println("ERROR: Switch case at {:X} is trying to jump outside function: {:X}", base, label);
+                    // Cases may jump into code shared with another function; that is a tail call if the target is a function start.
+                    auto targetSymbol = image.symbols.find(label);
+                    if (targetSymbol != image.symbols.end() && targetSymbol->address == label && targetSymbol->type == Symbol_Function)
+                    {
+                        print("\t");
+                        printFunctionCall(label);
+                    }
+                    else
+                    {
+                        println("\t\t// ERROR: 0x{:X}", label);
+                        fmt::println("ERROR: Switch case at {:X} is trying to jump outside function: {:X}", base, label);
+                    }
                     println("\t\treturn;");
                 }
                 else
@@ -712,7 +723,19 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_BLRL:
-        println("__builtin_debugtrap();");
+        if (config.skipLr)
+        {
+            // The target lives in LR, which isn't tracked when skip_lr is enabled.
+            fmt::println("blrl at {:X} needs the link register, which skip_lr disables", base);
+            println("\t__builtin_debugtrap();");
+        }
+        else
+        {
+            println("\t{}.u64 = ctx.lr;", temp());
+            println("\tctx.lr = 0x{:X};", base + 4);
+            println("\tPPC_CALL_INDIRECT_FUNC({}.u32);", temp());
+            csrState = CSRState::Unknown; // the call could change it
+        }
         break;
 
     case PPC_INST_BLT:
@@ -736,6 +759,25 @@ bool Recompiler::Recompile(
 
     case PPC_INST_BNELR:
         println("\tif (!{}.eq) return;", cr(insn.operands[0]));
+        break;
+
+    // Summary overflow; after a floating-point compare this is the unordered (NaN) bit.
+    case PPC_INST_BSO:
+    case PPC_INST_BUN:
+        printConditionalBranch(false, "so");
+        break;
+
+    case PPC_INST_BNS:
+    case PPC_INST_BNU:
+        printConditionalBranch(true, "so");
+        break;
+
+    case PPC_INST_BSOLR:
+        println("\tif ({}.so) return;", cr(insn.operands[0]));
+        break;
+
+    case PPC_INST_BNSLR:
+        println("\tif (!{}.so) return;", cr(insn.operands[0]));
         break;
 
     case PPC_INST_CCTPL:
@@ -1137,6 +1179,8 @@ bool Recompiler::Recompile(
     case PPC_INST_LVEWX128:
     case PPC_INST_LVX:
     case PPC_INST_LVX128:
+    case PPC_INST_LVXL: // "last use" cache hint only
+    case PPC_INST_LVXL128:
         // NOTE: for endian swapping, we reverse the whole vector instead of individual elements.
         // this is accounted for in every instruction (eg. dp3 sums yzw instead of xyz)
         print("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)(base + ((", v(insn.operands[0]));
@@ -1196,6 +1240,13 @@ bool Recompiler::Recompile(
 
     case PPC_INST_LWAX:
         print("\t{}.s64 = int32_t(PPC_LOAD_U32(", r(insn.operands[0]));
+        if (insn.operands[1] != 0)
+            print("{}.u32 + ", r(insn.operands[1]));
+        println("{}.u32));", r(insn.operands[2]));
+        break;
+
+    case PPC_INST_LHBRX:
+        print("\t{}.u64 = __builtin_bswap16(PPC_LOAD_U16(", r(insn.operands[0]));
         if (insn.operands[1] != 0)
             print("{}.u32 + ", r(insn.operands[1]));
         println("{}.u32));", r(insn.operands[2]));
@@ -1313,6 +1364,18 @@ bool Recompiler::Recompile(
 
     case PPC_INST_MULLD:
         println("\t{}.s64 = {}.s64 * {}.s64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+        break;
+
+    case PPC_INST_MULHD:
+        println("\t{}.s64 = int64_t((__int128_t({}.s64) * __int128_t({}.s64)) >> 64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+            println("\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());
+        break;
+
+    case PPC_INST_MULHDU:
+        println("\t{}.u64 = uint64_t((__uint128_t({}.u64) * __uint128_t({}.u64)) >> 64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+            println("\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());
         break;
 
     case PPC_INST_MULLI:
@@ -1635,6 +1698,8 @@ bool Recompiler::Recompile(
 
     case PPC_INST_STVX:
     case PPC_INST_STVX128:
+    case PPC_INST_STVXL: // "last use" cache hint only
+    case PPC_INST_STVXL128:
         print("\tsimde_mm_store_si128((simde__m128i*)(base + ((");
         if (insn.operands[1] != 0)
             print("{}.u32 + ", r(insn.operands[1]));
@@ -1769,6 +1834,7 @@ bool Recompiler::Recompile(
         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_and_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
         break;
 
+    case PPC_INST_VANDC:
     case PPC_INST_VANDC128:
         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_andnot_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
         break;
@@ -1831,7 +1897,18 @@ bool Recompiler::Recompile(
 
     case PPC_INST_VCMPBFP:
     case PPC_INST_VCMPBFP128:
-        println("\t__builtin_debugtrap();");
+        // Per element: bit 31 = !(a <= b), bit 30 = !(a >= -b). NaN compares false, so it sets both bits.
+        printSetFlushMode(true);
+        println("\tsimde_mm_store_si128((simde__m128i*){0}.u32, simde_mm_or_si128("
+            "simde_mm_andnot_si128(simde_mm_castps_si128(simde_mm_cmple_ps(simde_mm_load_ps({1}.f32), simde_mm_load_ps({2}.f32))), simde_mm_set1_epi32(int(0x80000000))), "
+            "simde_mm_andnot_si128(simde_mm_castps_si128(simde_mm_cmpge_ps(simde_mm_load_ps({1}.f32), simde_mm_xor_ps(simde_mm_load_ps({2}.f32), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))))), simde_mm_set1_epi32(0x40000000))));",
+            v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+        {
+            // CR6 = 0b00 || all_in_bounds || 0
+            println("\t{0}.lt = 0; {0}.gt = 0; {0}.so = 0;", cr(6));
+            println("\t{}.eq = simde_mm_movemask_ps(simde_mm_castsi128_ps(simde_mm_cmpeq_epi32(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_setzero_si128()))) == 0xF;", cr(6), v(insn.operands[0]));
+        }
         break;
 
     case PPC_INST_VCMPEQFP:
@@ -2014,32 +2091,68 @@ bool Recompiler::Recompile(
             println("\t{}.u32[{}] = {}.u32;", v(insn.operands[0]), insn.operands[4], temp());
             break;
 
+        case 3: // float16_2
         case 5: // float16_4
-            if (insn.operands[3] != 2 || insn.operands[4] > 2)
-                fmt::println("Unexpected float16_4 pack instruction at {:X}", base);
-
-            for (size_t i = 0; i < 4; i++)
+        {
+            // float16_2 packs (x, y) into one 32-bit slot (VPACK_32); float16_4 packs all four into 64 bits.
+            const bool two = insn.operands[2] == 3;
+            if (two ? (insn.operands[3] != 1) : (insn.operands[3] != 2 || insn.operands[4] > 2))
             {
+                fmt::println("Unexpected float16_{} pack instruction at {:X}", two ? 2 : 4, base);
+                println("\t__builtin_debugtrap();");
+                break;
+            }
+
+            // Halves are written element by element, so when the destination is also the source, later elements
+            // would be read after being partially overwritten. Pack from a scoped copy in that case.
+            const bool aliased = insn.operands[0] == insn.operands[1];
+            const std::string src = aliased ? std::string("vSrc") : v(insn.operands[1]);
+            if (aliased)
+            {
+                println("\t{{");
+                println("\tPPCVRegister vSrc = {};", v(insn.operands[1]));
+            }
+
+            // Source element index in the reversed host layout: x and y are u32[3] and u32[2].
+            const size_t first = two ? 2 : 0;
+            for (size_t j = 0; j < (two ? 2u : 4u); j++)
+            {
+                const size_t i = first + j;
         		// Strip sign from source
-        		println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", temp(), v(insn.operands[1]), i);
-        		// If |source| is > 65504, clamp output to 0x7FFF, else save 8 exponent bits 
-        		println("\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), v(insn.operands[1]), i);
+        		println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", temp(), src, i);
+        		// If |source| is > 65504, clamp output to 0x7FFF, else save 8 exponent bits
+        		println("\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), src, i);
         		// If 8 exponent bits were saved, it can only be 0x8E at most
         		// If saved, save first 10 bits of mantissa
-        		println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", temp(), vTemp(), v(insn.operands[1]), i);
+        		println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", temp(), vTemp(), src, i);
         		// If saved and > 127-15, exponent is converted from 8 to 5-bit by subtracting 0x70
         		// If saved but not > 127-15, clamp exponent at 0, add 0x400 to mantissa and shift right by (0x71-exponent)
         		// If right shift is greater than 31 bits, manually clamp mantissa to 0 or else the output of the shift will be wrong
-        		println("\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", v(insn.operands[0]), i+(2*insn.operands[4]), vTemp(), temp());
+        		println("\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", v(insn.operands[0]), j+(2*insn.operands[4]), vTemp(), temp());
         		// Add back original sign
-        		println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), i+(2*insn.operands[4]), v(insn.operands[1]), i);
+        		println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), j+(2*insn.operands[4]), src, i);
             }
+
+            if (aliased)
+                println("\t}}");
             break;
+        }
 
         default:
+            fmt::println("Unhandled vpkd3d128 type {} at {:X}", insn.operands[2], base);
             println("\t__builtin_debugtrap();");
             break;
         }
+        break;
+
+    case PPC_INST_VNOR:
+    case PPC_INST_VNOR128:
+        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_xor_si128(simde_mm_or_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)), simde_mm_set1_epi32(-1)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        break;
+
+    case PPC_INST_VPKSWSS:
+        // Operands are swapped because vectors are stored with their element order reversed (see VPKSHUS).
+        println("\tsimde_mm_store_si128((simde__m128i*){}.s16, simde_mm_packs_epi32(simde_mm_load_si128((simde__m128i*){}.s32), simde_mm_load_si128((simde__m128i*){}.s32)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
         break;
 
     case PPC_INST_VPKSHUS:
@@ -2088,6 +2201,7 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_VSEL:
+    case PPC_INST_VSEL128: // selector operand is vD itself; all inputs are read before the store
         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_or_si128(simde_mm_andnot_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)), simde_mm_and_si128(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8))));", v(insn.operands[0]), v(insn.operands[3]), v(insn.operands[1]), v(insn.operands[3]), v(insn.operands[2]));
         break;
 
@@ -2212,7 +2326,16 @@ bool Recompiler::Recompile(
             println("\t{} = {};", v(insn.operands[0]), vTemp());
             break;
 
+        case 3: // float16_2: (x, y, 0, 1) from the two halves of the last element, same layout as 2 shorts
+            for (size_t i = 0; i < 2; i++)
+                println("\t{}.f32[{}] = float(__builtin_bit_cast(_Float16, {}.u16[{}]));", vTemp(), 3 - i, v(insn.operands[1]), 1 - i);
+            println("\t{}.f32[1] = 0.0f;", vTemp());
+            println("\t{}.f32[0] = 1.0f;", vTemp());
+            println("\t{} = {};", v(insn.operands[0]), vTemp());
+            break;
+
         default:
+            fmt::println("Unhandled vupkd3d128 type {} at {:X}", insn.operands[2] >> 2, base);
             println("\t__builtin_debugtrap();");
             break;
         }
@@ -2416,7 +2539,9 @@ bool Recompiler::Recompile(const Function& fn)
 
         if (insn.opcode == nullptr)
         {
+            // Executing an undecodable word is an illegal instruction on hardware; trap instead of silently continuing.
             println("\t// {}", insn.op_str);
+            println("\t__builtin_trap();");
 #if 1
             if (*data != 0)
                 fmt::println("Unable to decode instruction {:X} at {:X}", *data, base);
