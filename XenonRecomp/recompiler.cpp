@@ -2328,7 +2328,7 @@ bool Recompiler::Recompile(
 
         case 3: // float16_2: (x, y, 0, 1) from the two halves of the last element, same layout as 2 shorts
             for (size_t i = 0; i < 2; i++)
-                println("\t{}.f32[{}] = float(__builtin_bit_cast(_Float16, {}.u16[{}]));", vTemp(), 3 - i, v(insn.operands[1]), 1 - i);
+                println("\t{}.f32[{}] = PPCHalfToFloat({}.u16[{}]);", vTemp(), 3 - i, v(insn.operands[1]), 1 - i);
             println("\t{}.f32[1] = 0.0f;", vTemp());
             println("\t{}.f32[0] = 1.0f;", vTemp());
             println("\t{} = {};", v(insn.operands[0]), vTemp());

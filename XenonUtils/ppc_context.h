@@ -144,6 +144,41 @@ struct PPCXERRegister
     uint8_t ca;
 };
 
+// IEEE half to float without _Float16, which would need compiler-rt (__extendhfsf2) on targets without F16C.
+inline float PPCHalfToFloat(uint16_t half) noexcept
+{
+    const uint32_t sign = uint32_t(half & 0x8000) << 16;
+    const uint32_t exponent = (half >> 10) & 0x1F;
+    uint32_t mantissa = half & 0x3FF;
+    uint32_t bits;
+
+    if (exponent == 0x1F)
+    {
+        bits = sign | 0x7F800000 | (mantissa << 13); // infinity / NaN
+    }
+    else if (exponent != 0)
+    {
+        bits = sign | ((exponent + 112) << 23) | (mantissa << 13); // rebias 15 -> 127
+    }
+    else if (mantissa == 0)
+    {
+        bits = sign; // signed zero
+    }
+    else
+    {
+        // Subnormal: normalize the mantissa; each shift lowers the exponent by one.
+        uint32_t shift = 0;
+        do
+        {
+            mantissa <<= 1;
+            shift++;
+        } while (!(mantissa & 0x400));
+        bits = sign | ((113 - shift) << 23) | ((mantissa & 0x3FF) << 13);
+    }
+
+    return __builtin_bit_cast(float, bits);
+}
+
 struct PPCCRRegister
 {
     uint8_t lt;
