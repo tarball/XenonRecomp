@@ -735,4 +735,10 @@ inline uint64_t __rdtsc()
 #   error "Missing implementation for __rdtsc()"
 #endif
 
+// Guest time base read by mftb. Defaults to the host cycle counter, whose rate differs from the
+// 360's; define PPC_QUERY_TIMEBASE before including this header to supply a fixed-rate clock.
+#ifndef PPC_QUERY_TIMEBASE
+#define PPC_QUERY_TIMEBASE() __rdtsc()
+#endif
+
 #endif

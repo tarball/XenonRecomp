@@ -1311,7 +1311,7 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_MFTB:
-        println("\t{}.u64 = __rdtsc();", r(insn.operands[0]));
+        println("\t{}.u64 = PPC_QUERY_TIMEBASE();", r(insn.operands[0]));
         break;
 
     case PPC_INST_MR:
