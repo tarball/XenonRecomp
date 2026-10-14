@@ -265,11 +265,14 @@ bool Recompiler::Recompile(
 {
     println("\t// {} {}", insn.opcode->name, insn.op_str);
 
+    // Functions that exchange registers outside the calling convention keep them all in the context.
+    const bool locals = config.keepRegistersInContext.count(fn.base) == 0;
+
     // TODO: we could cache these formats in an array
     auto r = [&](size_t index)
         {
-            if ((config.nonArgumentRegistersAsLocalVariables && (index == 0 || index == 2 || index == 11 || index == 12)) || 
-                (config.nonVolatileRegistersAsLocalVariables && index >= 14))
+            if (locals && ((config.nonArgumentRegistersAsLocalVariables && (index == 0 || index == 2 || index == 11 || index == 12)) ||
+                (config.nonVolatileRegistersAsLocalVariables && index >= 14)))
             {
                 localVariables.r[index] = true;
                 return fmt::format("r{}", index);
@@ -279,8 +282,8 @@ bool Recompiler::Recompile(
 
     auto f = [&](size_t index)
         {
-            if ((config.nonArgumentRegistersAsLocalVariables && index == 0) ||
-                (config.nonVolatileRegistersAsLocalVariables && index >= 14))
+            if (locals && ((config.nonArgumentRegistersAsLocalVariables && index == 0) ||
+                (config.nonVolatileRegistersAsLocalVariables && index >= 14)))
             {
                 localVariables.f[index] = true;
                 return fmt::format("f{}", index);
@@ -290,8 +293,8 @@ bool Recompiler::Recompile(
 
     auto v = [&](size_t index)
         {
-            if ((config.nonArgumentRegistersAsLocalVariables && (index >= 32 && index <= 63)) ||
-                (config.nonVolatileRegistersAsLocalVariables && ((index >= 14 && index <= 31) || (index >= 64 && index <= 127))))
+            if (locals && ((config.nonArgumentRegistersAsLocalVariables && (index >= 32 && index <= 63)) ||
+                (config.nonVolatileRegistersAsLocalVariables && ((index >= 14 && index <= 31) || (index >= 64 && index <= 127)))))
             {
                 localVariables.v[index] = true;
                 return fmt::format("v{}", index);
@@ -301,7 +304,7 @@ bool Recompiler::Recompile(
 
     auto cr = [&](size_t index)
         {
-            if (config.crRegistersAsLocalVariables)
+            if (locals && config.crRegistersAsLocalVariables)
             {
                 localVariables.cr[index] = true;
                 return fmt::format("cr{}", index);
@@ -311,7 +314,7 @@ bool Recompiler::Recompile(
 
     auto ctr = [&]()
         {
-            if (config.ctrAsLocalVariable)
+            if (locals && config.ctrAsLocalVariable)
             {
                 localVariables.ctr = true;
                 return "ctr";
@@ -321,7 +324,7 @@ bool Recompiler::Recompile(
 
     auto xer = [&]()
         {
-            if (config.xerAsLocalVariable)
+            if (locals && config.xerAsLocalVariable)
             {
                 localVariables.xer = true;
                 return "xer";
@@ -331,7 +334,7 @@ bool Recompiler::Recompile(
 
     auto reserved = [&]()
         {
-            if (config.reservedRegisterAsLocalVariable)
+            if (locals && config.reservedRegisterAsLocalVariable)
             {
                 localVariables.reserved = true;
                 return "reserved";
@@ -388,9 +391,12 @@ bool Recompiler::Recompile(
 
                 if (targetSymbol != image.symbols.end() && targetSymbol->address == address && targetSymbol->type == Symbol_Function)
                 {
-                    if (config.nonVolatileRegistersAsLocalVariables && (targetSymbol->name.find("__rest") == 0 || targetSymbol->name.find("__save") == 0))
+                    if (locals && config.nonVolatileRegistersAsLocalVariables && (targetSymbol->name.find("__rest") == 0 || targetSymbol->name.find("__save") == 0))
                     {
-                        // print nothing
+                        // The registers are locals, so there's nothing to save or restore. But keep __savegprlr's store of
+                        // the link register (r12) at -8(r1): stack walks read the return addresses there.
+                        if (targetSymbol->name.find("__savegprlr") == 0)
+                            println("	PPC_STORE_U32({}.u32 - 8, {}.u32);", r(1), r(12));
                     }
                     else
                     {
@@ -2651,6 +2657,8 @@ void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
             println("#define PPC_CONFIG_NON_ARGUMENT_AS_LOCAL");   
         if (config.nonVolatileRegistersAsLocalVariables)
             println("#define PPC_CONFIG_NON_VOLATILE_AS_LOCAL");
+        if (!config.keepRegistersInContext.empty())
+            println("#define PPC_CONFIG_KEEP_CONTEXT_REGISTERS");
 
         println("");
 

@@ -50,6 +50,11 @@ struct RecompilerConfig
     uint32_t longJmpAddress = 0;
     uint32_t setJmpAddress = 0;
     std::unordered_map<uint32_t, uint32_t> functions;
+    // Functions that keep every register in the PPC context despite the *_as_local options, because they exchange
+    // values with other functions outside the calling convention (SEH funclets and their parents, functions split
+    // around jump tables, the register save/restore helpers): keep_registers_in_context, or the same array in the file
+    // keep_registers_in_context_file_path names.
+    std::unordered_set<uint32_t> keepRegistersInContext;
     std::unordered_map<uint32_t, uint32_t> invalidInstructions;
     std::unordered_map<uint32_t, RecompilerMidAsmHook> midAsmHooks;
 

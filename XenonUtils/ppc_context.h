@@ -339,11 +339,11 @@ struct PPCFPSCRRegister
 struct alignas(0x40) PPCContext
 {
     PPCRegister r3;
-#ifndef PPC_CONFIG_NON_ARGUMENT_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_ARGUMENT_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister r0;
 #endif
     PPCRegister r1;
-#ifndef PPC_CONFIG_NON_ARGUMENT_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_ARGUMENT_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister r2;
 #endif
     PPCRegister r4;
@@ -353,12 +353,12 @@ struct alignas(0x40) PPCContext
     PPCRegister r8;
     PPCRegister r9;
     PPCRegister r10;
-#ifndef PPC_CONFIG_NON_ARGUMENT_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_ARGUMENT_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister r11;
     PPCRegister r12;
 #endif
     PPCRegister r13;
-#ifndef PPC_CONFIG_NON_VOLATILE_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_VOLATILE_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister r14;
     PPCRegister r15;
     PPCRegister r16;
@@ -382,19 +382,19 @@ struct alignas(0x40) PPCContext
 #ifndef PPC_CONFIG_SKIP_LR
     uint64_t lr;
 #endif
-#ifndef PPC_CONFIG_CTR_AS_LOCAL
+#if !defined(PPC_CONFIG_CTR_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister ctr;
 #endif
-#ifndef PPC_CONFIG_XER_AS_LOCAL
+#if !defined(PPC_CONFIG_XER_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCXERRegister xer;
 #endif
-#ifndef PPC_CONFIG_RESERVED_AS_LOCAL
+#if !defined(PPC_CONFIG_RESERVED_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister reserved;
 #endif
 #ifndef PPC_CONFIG_SKIP_MSR
     uint32_t msr = 0x200A000;
 #endif
-#ifndef PPC_CONFIG_CR_AS_LOCAL
+#if !defined(PPC_CONFIG_CR_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCCRRegister cr0;
     PPCCRRegister cr1;
     PPCCRRegister cr2;
@@ -406,7 +406,7 @@ struct alignas(0x40) PPCContext
 #endif
     PPCFPSCRRegister fpscr;
 
-#ifndef PPC_CONFIG_NON_ARGUMENT_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_ARGUMENT_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister f0;
 #endif
     PPCRegister f1;
@@ -422,7 +422,7 @@ struct alignas(0x40) PPCContext
     PPCRegister f11;
     PPCRegister f12;
     PPCRegister f13;
-#ifndef PPC_CONFIG_NON_VOLATILE_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_VOLATILE_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCRegister f14;
     PPCRegister f15;
     PPCRegister f16;
@@ -457,7 +457,7 @@ struct alignas(0x40) PPCContext
     PPCVRegister v11;
     PPCVRegister v12;
     PPCVRegister v13;
-#ifndef PPC_CONFIG_NON_VOLATILE_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_VOLATILE_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCVRegister v14;
     PPCVRegister v15;
     PPCVRegister v16;
@@ -477,7 +477,7 @@ struct alignas(0x40) PPCContext
     PPCVRegister v30;
     PPCVRegister v31;
 #endif
-#ifndef PPC_CONFIG_NON_ARGUMENT_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_ARGUMENT_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCVRegister v32;
     PPCVRegister v33;
     PPCVRegister v34;
@@ -511,7 +511,7 @@ struct alignas(0x40) PPCContext
     PPCVRegister v62;
     PPCVRegister v63;
 #endif
-#ifndef PPC_CONFIG_NON_VOLATILE_AS_LOCAL
+#if !defined(PPC_CONFIG_NON_VOLATILE_AS_LOCAL) || defined(PPC_CONFIG_KEEP_CONTEXT_REGISTERS)
     PPCVRegister v64;
     PPCVRegister v65;
     PPCVRegister v66;

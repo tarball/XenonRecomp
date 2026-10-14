@@ -58,6 +58,26 @@ void RecompilerConfig::Load(const std::string_view& configFilePath)
             }
         }
 
+        const auto keepRegisters = [&](const toml::node_view<const toml::node>& array)
+        {
+            if (auto addresses = array.as_array())
+            {
+                for (auto& address : *addresses)
+                    keepRegistersInContext.emplace(*address.value<uint32_t>());
+            }
+        };
+        keepRegisters(main["keep_registers_in_context"]);
+        const std::string keepFilePath = main["keep_registers_in_context_file_path"].value_or<std::string>("");
+        if (!keepFilePath.empty())
+        {
+            toml::table keepToml = toml::parse_file(directoryPath + keepFilePath)
+#if !TOML_EXCEPTIONS
+                .table()
+#endif
+                ;
+            keepRegisters(std::as_const(keepToml)["keep_registers_in_context"]);
+        }
+
         if (auto invalidArray = main["invalid_instructions"].as_array())
         {
             for (auto& instr : *invalidArray)
