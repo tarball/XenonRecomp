@@ -664,6 +664,22 @@ inline simde__m128i simde_mm_adds_epu32(simde__m128i a, simde__m128i b)
     return simde_mm_add_epi32(a, simde_mm_min_epu32(simde_mm_xor_si128(a, simde_mm_cmpeq_epi32(a, a)), b));
 }
 
+inline simde__m128i simde_mm_adds_epi32(simde__m128i a, simde__m128i b)
+{
+    // A sum overflows when a and b have the same sign and the sum's differs; it then saturates toward a's sign.
+    simde__m128i sum = simde_mm_add_epi32(a, b);
+    simde__m128i overflow = simde_mm_andnot_si128(simde_mm_xor_si128(a, b), simde_mm_xor_si128(a, sum));
+    simde__m128i saturated = simde_mm_xor_si128(simde_mm_srai_epi32(a, 31), simde_mm_set1_epi32(INT_MAX));
+    return simde_mm_castps_si128(simde_mm_blendv_ps(simde_mm_castsi128_ps(sum), simde_mm_castsi128_ps(saturated), simde_mm_castsi128_ps(overflow)));
+}
+
+inline simde__m128i simde_mm_avg_epi32(simde__m128i a, simde__m128i b)
+{
+    // (a + b + 1) >> 1 without overflowing: (a >> 1) + (b >> 1) + ((a | b) & 1).
+    return simde_mm_add_epi32(simde_mm_add_epi32(simde_mm_srai_epi32(a, 1), simde_mm_srai_epi32(b, 1)),
+        simde_mm_and_si128(simde_mm_or_si128(a, b), simde_mm_set1_epi32(1)));
+}
+
 inline simde__m128i simde_mm_avg_epi8(simde__m128i a, simde__m128i b)
 {
     simde__m128i c = simde_mm_set1_epi8(char(128));
@@ -715,6 +731,17 @@ inline simde__m128i simde_mm_vctsxs(simde__m128 src1)
     xmm1 = simde_mm_andnot_si128(simde_mm_castps_si128(src1), xmm1);
     simde__m128 dest = simde_mm_blendv_ps(simde_mm_castsi128_ps(xmm0), simde_mm_castsi128_ps(simde_mm_set1_epi32(INT_MAX)), simde_mm_castsi128_ps(xmm1));
     return simde_mm_andnot_si128(simde_mm_castps_si128(xmm2), simde_mm_castps_si128(dest));
+}
+
+inline simde__m128i simde_mm_vctuxs(simde__m128 src1)
+{
+    // Truncated and saturated to [0, 2^32 - 1]. maxps returns its second operand for NaN, so NaN and negatives give 0.
+    // Values from 2^31 are converted less 2^31, which cvttps can represent, and get the top bit back.
+    simde__m128 value = simde_mm_max_ps(src1, simde_mm_setzero_ps());
+    simde__m128 high = simde_mm_cmpge_ps(value, simde_mm_set1_ps(2147483648.0f));
+    simde__m128i result = simde_mm_cvttps_epi32(simde_mm_sub_ps(value, simde_mm_and_ps(high, simde_mm_set1_ps(2147483648.0f))));
+    result = simde_mm_xor_si128(result, simde_mm_and_si128(simde_mm_castps_si128(high), simde_mm_set1_epi32(INT_MIN)));
+    return simde_mm_or_si128(result, simde_mm_castps_si128(simde_mm_cmpge_ps(value, simde_mm_set1_ps(4294967296.0f))));
 }
 
 inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b)
