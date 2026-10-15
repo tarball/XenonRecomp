@@ -2792,6 +2792,22 @@ void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
     }
 
     SaveCurrentOutData();
+
+    // Files beyond this run's, left by an earlier run with more functions, would still be built and define
+    // functions twice.
+    std::string directoryPath = config.directoryPath;
+    if (!directoryPath.empty())
+        directoryPath += "/";
+
+    for (size_t index = cppFileIndex;; index++)
+    {
+        const std::filesystem::path stale = fmt::format("{}{}/ppc_recomp.{}.cpp", directoryPath, config.outDirectoryPath, index);
+        std::error_code error;
+        if (!std::filesystem::remove(stale, error))
+            break;
+
+        fmt::println("Removed {}, left by an earlier run", stale.string());
+    }
 }
 
 void Recompiler::SaveCurrentOutData(const std::string_view& name)
