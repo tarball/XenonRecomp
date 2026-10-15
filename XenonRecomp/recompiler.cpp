@@ -616,7 +616,9 @@ bool Recompiler::Recompile(
     case PPC_INST_BCTR:
         if (switchTable != config.switchTables.end())
         {
-            println("\tswitch ({}.u64) {{", r(switchTable->second.r));
+            // The index is the register's low word: the guest's bounds check (cmplwi) and table access (rlwinm) are
+            // 32-bit, and lwz zero-extends, so a negative index brought into range by an addi has bit 32 set.
+            println("\tswitch ({}.u32) {{", r(switchTable->second.r));
 
             for (size_t i = 0; i < switchTable->second.labels.size(); i++)
             {
