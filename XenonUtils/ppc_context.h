@@ -5,12 +5,16 @@
 #error "ppc_config.h must be included before ppc_context.h"
 #endif
 
+#include <atomic>
 #include <climits>
 #include <cmath>
 #include <csetjmp>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 #include <x86/avx.h>
 #include <x86/sse.h>
@@ -113,6 +117,38 @@
 #define PPC_CALL_INDIRECT_FUNC(x) (PPC_LOOKUP_FUNC(base, x))(ctx, base)
 #endif
 
+// A trap whose condition holds (tw, twi, td, tdi): the instruction's address and word. Those are the compiler's checks
+// (divide by zero, overflow) and the debug breaks and services (twi 31,r0,22 breaks; twi 31,r0,20 prints the string at
+// r3, r4 bytes long). By default nothing happens.
+#ifndef PPC_TRAP
+#define PPC_TRAP(address, instruction) ((void)0)
+#endif
+
+// A jump table's index beyond the table, which the guest's bounds check should have excluded.
+#ifndef PPC_SWITCH_OUT_OF_RANGE
+#define PPC_SWITCH_OUT_OF_RANGE(address, index) __builtin_trap()
+#endif
+
+// setjmp and longjmp use a host jmp_buf for the guest's buffer, kept on the host side: the host's is larger than the
+// guest's and needs 16-byte alignment, and the guest's buffer stays the guest's.
+#ifndef PPC_JMP_BUF
+inline jmp_buf& PPCHostJmpBuf(uint32_t guestBuffer)
+{
+    struct Buffer
+    {
+        jmp_buf value;
+    };
+    static std::mutex lock;
+    static std::unordered_map<uint32_t, std::unique_ptr<Buffer>> buffers;
+    std::lock_guard guard(lock);
+    std::unique_ptr<Buffer>& buffer = buffers[guestBuffer];
+    if (!buffer)
+        buffer = std::make_unique<Buffer>();
+    return buffer->value;
+}
+#define PPC_JMP_BUF(guestBuffer) PPCHostJmpBuf(guestBuffer)
+#endif
+
 typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);
 
 struct PPCFuncMapping
@@ -144,7 +180,9 @@ struct PPCXERRegister
     uint8_t ca;
 };
 
-// IEEE half to float without _Float16, which would need compiler-rt (__extendhfsf2) on targets without F16C.
+// Half to float as the 360 converts D3D's half floats (vupkd3d128): IEEE's layout, but with no infinity or NaN, so
+// exponent 31 is an ordinary one (to 131008), as XNAMath converts them. Without _Float16, which would need
+// compiler-rt (__extendhfsf2) on targets without F16C.
 inline float PPCHalfToFloat(uint16_t half) noexcept
 {
     const uint32_t sign = uint32_t(half & 0x8000) << 16;
@@ -152,11 +190,7 @@ inline float PPCHalfToFloat(uint16_t half) noexcept
     uint32_t mantissa = half & 0x3FF;
     uint32_t bits;
 
-    if (exponent == 0x1F)
-    {
-        bits = sign | 0x7F800000 | (mantissa << 13); // infinity / NaN
-    }
-    else if (exponent != 0)
+    if (exponent != 0)
     {
         bits = sign | ((exponent + 112) << 23) | (mantissa << 13); // rebias 15 -> 127
     }

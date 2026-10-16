@@ -374,14 +374,16 @@ bool Recompiler::Recompile(
 
     auto printFunctionCall = [&](uint32_t address)
         {
+            // The host's jmp_buf for the guest's buffer at r3 is kept on the host side (PPC_JMP_BUF): it's larger than the
+            // guest's and needs 16-byte alignment, and the guest's buffer stays the guest's.
             if (address == config.longJmpAddress)
             {
-                println("\tlongjmp(*reinterpret_cast<jmp_buf*>(base + {}.u32), {}.s32);", r(3), r(4));
+                println("\tlongjmp(PPC_JMP_BUF({}.u32), {}.s32);", r(3), r(4));
             }
             else if (address == config.setJmpAddress)
             {
                 println("\t{} = ctx;", env());
-                println("\t{}.s64 = setjmp(*reinterpret_cast<jmp_buf*>(base + {}.u32));", temp(), r(3));
+                println("\t{}.s64 = setjmp(PPC_JMP_BUF({}.u32));", temp(), r(3));
                 println("\tif ({}.s64 != 0) ctx = {};", temp(), env());
                 println("\t{} = {};", r(3), temp());
             }
@@ -646,8 +648,10 @@ bool Recompiler::Recompile(
                 }
             }
 
+            // An index the guest's bounds check should have excluded: reported, rather than undefined.
             println("\tdefault:");
-            println("\t\t__builtin_unreachable();");
+            println("\t\tPPC_SWITCH_OUT_OF_RANGE(0x{:X}, {}.u32);", base, r(switchTable->second.r));
+            println("\t\treturn;");
             println("\t}}");
 
             switchTable = config.switchTables.end();
@@ -899,7 +903,8 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_EIEIO:
-        // no op
+        // Orders memory accesses as x86 already does; only the compiler mustn't move them across it.
+        println("\tstd::atomic_thread_fence(std::memory_order_acq_rel);");
         break;
 
     case PPC_INST_EXTSB:
@@ -971,8 +976,11 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_FMADD:
+        // The multiply-adds are fused: the product isn't rounded before the addition. The single-precision forms
+        // compute in double: when their inputs are floats, as single-precision code's are, the product is exact there,
+        // which gives the fused result but for rare ties.
         printSetFlushMode(false);
-        println("\t{}.f64 = {}.f64 * {}.f64 + {}.f64;", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
+        println("\t{}.f64 = std::fma({}.f64, {}.f64, {}.f64);", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
         break;
 
     case PPC_INST_FMADDS:
@@ -986,8 +994,9 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_FMSUB:
+        // Fused, as fmadd.
         printSetFlushMode(false);
-        println("\t{}.f64 = {}.f64 * {}.f64 - {}.f64;", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
+        println("\t{}.f64 = std::fma({}.f64, {}.f64, -{}.f64);", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
         break;
 
     case PPC_INST_FMSUBS:
@@ -1015,14 +1024,21 @@ bool Recompiler::Recompile(
         println("\t{}.u64 = {}.u64 ^ 0x8000000000000000;", f(insn.operands[0]), f(insn.operands[1]));
         break;
 
+    case PPC_INST_FNMADD:
+        // Fused, as fmadd.
+        printSetFlushMode(false);
+        println("\t{}.f64 = -std::fma({}.f64, {}.f64, {}.f64);", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
+        break;
+
     case PPC_INST_FNMADDS:
         printSetFlushMode(false);
         println("\t{}.f64 = double(float(-({}.f64 * {}.f64 + {}.f64)));", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
         break;
 
     case PPC_INST_FNMSUB:
+        // Fused, as fmadd.
         printSetFlushMode(false);
-        println("\t{}.f64 = -({}.f64 * {}.f64 - {}.f64);", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
+        println("\t{}.f64 = -std::fma({}.f64, {}.f64, -{}.f64);", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
         break;
 
     case PPC_INST_FNMSUBS:
@@ -1268,7 +1284,8 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_LWSYNC:
-        // no op
+        // As eieio: everything but a load after an earlier store, which x86 orders too.
+        println("\tstd::atomic_thread_fence(std::memory_order_acq_rel);");
         break;
 
     case PPC_INST_LWZ:
@@ -1456,7 +1473,8 @@ bool Recompiler::Recompile(
     case PPC_INST_RLWIMI:
     {
         const uint64_t mask = ComputeMask(insn.operands[3] + 32, insn.operands[4] + 32);
-        println("\t{}.u64 = (__builtin_rotateleft32({}.u32, {}) & 0x{:X}) | ({}.u64 & 0x{:X});", r(insn.operands[0]), r(insn.operands[1]), insn.operands[2], mask, r(insn.operands[0]), ~mask);
+        // ROTL32 rotates the word doubled to 64 bits, which a mask that wraps (mb > me) takes the upper word of.
+        println("\t{}.u64 = (__builtin_rotateleft64({}.u32 | ({}.u64 << 32), {}) & 0x{:X}) | ({}.u64 & 0x{:X});", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[1]), insn.operands[2], mask, r(insn.operands[0]), ~mask);
         break;
     }
 
@@ -1793,28 +1811,123 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_SYNC:
-        // no op
+        // A full barrier: x86 lets a load pass an earlier store, which sync forbids.
+        println("\tstd::atomic_thread_fence(std::memory_order_seq_cst);");
         break;
 
+    case PPC_INST_TD:
+    case PPC_INST_TDEQ:
+    case PPC_INST_TDEQI:
+    case PPC_INST_TDGE:
+    case PPC_INST_TDGEI:
+    case PPC_INST_TDGT:
+    case PPC_INST_TDGTI:
+    case PPC_INST_TDI:
+    case PPC_INST_TDLE:
+    case PPC_INST_TDLEI:
+    case PPC_INST_TDLGE:
     case PPC_INST_TDLGEI:
-        // no op
-        break;
-
+    case PPC_INST_TDLGT:
+    case PPC_INST_TDLGTI:
+    case PPC_INST_TDLLE:
     case PPC_INST_TDLLEI:
-        // no op
-        break;
-
+    case PPC_INST_TDLLT:
+    case PPC_INST_TDLLTI:
+    case PPC_INST_TDLNG:
+    case PPC_INST_TDLNGI:
+    case PPC_INST_TDLNL:
+    case PPC_INST_TDLNLI:
+    case PPC_INST_TDLT:
+    case PPC_INST_TDLTI:
+    case PPC_INST_TDNE:
+    case PPC_INST_TDNEI:
+    case PPC_INST_TDNG:
+    case PPC_INST_TDNGI:
+    case PPC_INST_TDNL:
+    case PPC_INST_TDNLI:
+    case PPC_INST_TW:
+    case PPC_INST_TWEQ:
+    case PPC_INST_TWEQI:
+    case PPC_INST_TWGE:
+    case PPC_INST_TWGEI:
+    case PPC_INST_TWGT:
+    case PPC_INST_TWGTI:
     case PPC_INST_TWI:
-        // no op
-        break;
-
+    case PPC_INST_TWLE:
+    case PPC_INST_TWLEI:
+    case PPC_INST_TWLGE:
     case PPC_INST_TWLGEI:
-        // no op
-        break;
-
+    case PPC_INST_TWLGT:
+    case PPC_INST_TWLGTI:
+    case PPC_INST_TWLLE:
     case PPC_INST_TWLLEI:
-        // no op
+    case PPC_INST_TWLLT:
+    case PPC_INST_TWLLTI:
+    case PPC_INST_TWLNG:
+    case PPC_INST_TWLNGI:
+    case PPC_INST_TWLNL:
+    case PPC_INST_TWLNLI:
+    case PPC_INST_TWLT:
+    case PPC_INST_TWLTI:
+    case PPC_INST_TWNE:
+    case PPC_INST_TWNEI:
+    case PPC_INST_TWNG:
+    case PPC_INST_TWNGI:
+    case PPC_INST_TWNL:
+    case PPC_INST_TWNLI:
+    {
+        // Traps go to PPC_TRAP with the instruction's address and word: the compiler's checks (divide by zero before
+        // divw, overflow) and the debug breaks and services (twi 31,r0,22 breaks; twi 31,r0,20 prints the string at
+        // r3, r4 bytes long). The condition comes from the word, whichever simplified mnemonic it disassembled as: TO's
+        // bits are signed less, signed greater, equal, unsigned less and unsigned greater, comparing rA with rB or with
+        // the sign-extended immediate, in 32 or 64 bits.
+        const uint32_t word = ByteSwap(*data);
+        const uint32_t opcode = word >> 26;
+        const bool immediate = opcode == 2 || opcode == 3; // tdi, twi; else td, tw
+        const bool doubleword = opcode == 2 || (opcode == 31 && ((word >> 1) & 0x3FF) == 68);
+        const uint32_t to = (word >> 21) & 0x1F;
+        const uint32_t ra = (word >> 16) & 0x1F;
+        const uint32_t rb = (word >> 11) & 0x1F;
+        const int64_t simm = int16_t(word & 0xFFFF);
+        auto compare = [&](bool isSigned, const char* op)
+            {
+                const char* field = doubleword ? (isSigned ? "s64" : "u64") : (isSigned ? "s32" : "u32");
+                if (!immediate)
+                    return fmt::format("{}.{} {} {}.{}", r(ra), field, op, r(rb), field);
+                if (doubleword)
+                    return isSigned ? fmt::format("{}.{} {} {}ll", r(ra), field, op, simm) : fmt::format("{}.{} {} {}ull", r(ra), field, op, uint64_t(simm));
+                return isSigned ? fmt::format("{}.{} {} {}", r(ra), field, op, int32_t(simm)) : fmt::format("{}.{} {} {}u", r(ra), field, op, uint32_t(int32_t(simm)));
+            };
+
+        const bool sameRegister = !immediate && ra == rb;
+        if ((to & 0x1C) == 0x1C || (to & 0x07) == 0x07 || (sameRegister && (to & 0x04)))
+        {
+            println("\tPPC_TRAP(0x{:X}, 0x{:08X});", base, word);
+            break;
+        }
+
+        // Comparisons that can't hold (unsigned less than 0, unsigned greater than the maximum, or a register with
+        // itself) are left out.
+        std::string condition;
+        auto add = [&](bool when, bool isSigned, const char* op)
+            {
+                if (!when)
+                    return;
+                if (!condition.empty())
+                    condition += " || ";
+                condition += compare(isSigned, op);
+            };
+        add((to & 0x10) && !sameRegister, true, "<");
+        add((to & 0x08) && !sameRegister, true, ">");
+        add((to & 0x04) && !sameRegister, true, "==");
+        add((to & 0x02) && !sameRegister && !(immediate && simm == 0), false, "<");
+        add((to & 0x01) && !sameRegister && !(immediate && simm == -1), false, ">");
+        if (condition.empty())
+            println("\t// never traps");
+        else
+            println("\tif ({}) PPC_TRAP(0x{:X}, 0x{:08X});", condition, base, word);
         break;
+    }
 
     case PPC_INST_VADDFP:
     case PPC_INST_VADDFP128:
@@ -2162,9 +2275,10 @@ bool Recompiler::Recompile(
                 const size_t i = first + j;
         		// Strip sign from source
         		println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", temp(), src, i);
-        		// If |source| is > 65504, clamp output to 0x7FFF, else save 8 exponent bits
-        		println("\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), src, i);
-        		// If 8 exponent bits were saved, it can only be 0x8E at most
+        		// The 360's half floats have no infinity or NaN (exponent 31 is finite, to 131008, as XNAMath converts
+        		// them): if |source| is NaN or 2^17 or more, clamp output to 0x7FFF, else save 8 exponent bits
+        		println("\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 >= 131072.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), src, i);
+        		// If 8 exponent bits were saved, it can only be 0x8F at most
         		// If saved, save first 10 bits of mantissa
         		println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", temp(), vTemp(), src, i);
         		// If saved and > 127-15, exponent is converted from 8 to 5-bit by subtracting 0x70
