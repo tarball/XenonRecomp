@@ -2009,8 +2009,11 @@ bool Recompiler::Recompile(
     case PPC_INST_VMADDCFP128:
     case PPC_INST_VMADDFP:
     case PPC_INST_VMADDFP128:
+        // The VMX multiply-adds are fused: the product isn't rounded. In double precision, the product of two floats is
+        // exact and the sum is rounded once before the float result, which is the fused result but for rare ties. (A
+        // float multiply and add round twice: products that should cancel to a tiny value can cancel to 0.)
         printSetFlushMode(true);
-        println("\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), v(insn.operands[3]));
+        println("\tsimde_mm_store_ps({}.f32, simde_mm256_cvtpd_ps(simde_mm256_add_pd(simde_mm256_mul_pd(simde_mm256_cvtps_pd(simde_mm_load_ps({}.f32)), simde_mm256_cvtps_pd(simde_mm_load_ps({}.f32))), simde_mm256_cvtps_pd(simde_mm_load_ps({}.f32)))));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), v(insn.operands[3]));
         break;
 
     case PPC_INST_VMAXFP:
@@ -2077,8 +2080,9 @@ bool Recompiler::Recompile(
 
     case PPC_INST_VNMSUBFP:
     case PPC_INST_VNMSUBFP128:
+        // Fused, as vmaddfp above.
         printSetFlushMode(true);
-        println("\tsimde_mm_store_ps({}.f32, simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), v(insn.operands[3]));
+        println("\tsimde_mm_store_ps({}.f32, simde_mm_xor_ps(simde_mm256_cvtpd_ps(simde_mm256_sub_pd(simde_mm256_mul_pd(simde_mm256_cvtps_pd(simde_mm_load_ps({}.f32)), simde_mm256_cvtps_pd(simde_mm_load_ps({}.f32))), simde_mm256_cvtps_pd(simde_mm_load_ps({}.f32)))), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), v(insn.operands[3]));
         break;
 
     case PPC_INST_VOR:
