@@ -105,6 +105,49 @@
 #define PPC_MM_STORE_U64(x, y)  PPC_STORE_U64(x, y)
 #endif
 
+// The other stores, which a runtime can replace as it can the ones above, to see every store the guest makes: dcbz and
+// dcbzl zero `size` bytes at the aligned address `x` (a cache block), stvx and its variants store the vector `y` at the
+// aligned address `x`, and stwcx. and stdcx. store `y` at `x` if it still holds `expected` (the reservation's value),
+// giving whether they did.
+#ifndef PPC_STORE_ZERO
+#define PPC_STORE_ZERO(x, size) memset(base + (x), 0, size)
+#endif
+
+#ifndef PPC_STORE_V128
+#define PPC_STORE_V128(x, y) simde_mm_store_si128((simde__m128i*)(base + (x)), y)
+#endif
+
+#ifndef PPC_STORE_CONDITIONAL_U32
+#define PPC_STORE_CONDITIONAL_U32(x, expected, y) __sync_bool_compare_and_swap(reinterpret_cast<uint32_t*>(base + (x)), expected, y)
+#endif
+
+#ifndef PPC_STORE_CONDITIONAL_U64
+#define PPC_STORE_CONDITIONAL_U64(x, expected, y) __sync_bool_compare_and_swap(reinterpret_cast<uint64_t*>(base + (x)), expected, y)
+#endif
+
+// group_stores (the config's): runs of stores off one base register in straight-line code get one PPC_CHECK_STORES of the
+// `size` bytes from `x` they write, before the first, and are written with PPC_STORE_COVERED_*, for runtimes that check
+// each store's pages and can check a run once. By default there's nothing to check, and covered stores are stores.
+#ifndef PPC_CHECK_STORES
+#define PPC_CHECK_STORES(x, size) ((void)0)
+#endif
+
+#ifndef PPC_STORE_COVERED_U8
+#define PPC_STORE_COVERED_U8(x, y) PPC_STORE_U8(x, y)
+#endif
+
+#ifndef PPC_STORE_COVERED_U16
+#define PPC_STORE_COVERED_U16(x, y) PPC_STORE_U16(x, y)
+#endif
+
+#ifndef PPC_STORE_COVERED_U32
+#define PPC_STORE_COVERED_U32(x, y) PPC_STORE_U32(x, y)
+#endif
+
+#ifndef PPC_STORE_COVERED_U64
+#define PPC_STORE_COVERED_U64(x, y) PPC_STORE_U64(x, y)
+#endif
+
 #ifndef PPC_CALL_FUNC
 #define PPC_CALL_FUNC(x) x(ctx, base)
 #endif

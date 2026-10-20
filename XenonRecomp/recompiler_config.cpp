@@ -26,6 +26,7 @@ void RecompilerConfig::Load(const std::string_view& configFilePath)
         crRegistersAsLocalVariables = main["cr_as_local"].value_or(false);
         nonArgumentRegistersAsLocalVariables = main["non_argument_as_local"].value_or(false);
         nonVolatileRegistersAsLocalVariables = main["non_volatile_as_local"].value_or(false);
+        groupStores = main["group_stores"].value_or(false);
 
         restGpr14Address = main["restgprlr_14_address"].value_or(0u);
         saveGpr14Address = main["savegprlr_14_address"].value_or(0u);

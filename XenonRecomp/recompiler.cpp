@@ -372,6 +372,20 @@ bool Recompiler::Recompile(
             return *(data + 1) == c_eieio;
         };
 
+    // group_stores: the macro a store of this type is written with (a covered one if a run's check covers it), after
+    // that check if this is the run's first store.
+    auto store = [&](const char* type) -> std::string
+        {
+            if (const auto group = storeGroups.find(base); group != storeGroups.end())
+            {
+                println("\tPPC_CHECK_STORES({}.u32 + {}, {});", r(group->second.base), group->second.low,
+                    group->second.high - group->second.low + 1);
+            }
+            if (groupedStores.count(base))
+                return fmt::format("\tPPC_STORE_COVERED_{}(", type);
+            return fmt::format("\tPPC_STORE_{}(", type);
+        };
+
     auto printFunctionCall = [&](uint32_t address)
         {
             // The host's jmp_buf for the guest's buffer at r3 is kept on the host side (PPC_JMP_BUF): it's larger than the
@@ -867,17 +881,17 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_DCBZ:
-        print("\tmemset(base + ((");
+        print("\tPPC_STORE_ZERO((");
         if (insn.operands[0] != 0)
             print("{}.u32 + ", r(insn.operands[0]));
-        println("{}.u32) & ~31), 0, 32);", r(insn.operands[1]));
+        println("{}.u32) & ~31, 32);", r(insn.operands[1]));
         break;
 
     case PPC_INST_DCBZL:
-        print("\tmemset(base + ((");
+        print("\tPPC_STORE_ZERO((");
         if (insn.operands[0] != 0)
             print("{}.u32 + ", r(insn.operands[0]));
-        println("{}.u32) & ~127), 0, 128);", r(insn.operands[1]));
+        println("{}.u32) & ~127, 128);", r(insn.operands[1]));
         break;
 
     case PPC_INST_DIVD:
@@ -1563,7 +1577,7 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_STB:
-        print("{}", mmioStore() ? "\tPPC_MM_STORE_U8(" : "\tPPC_STORE_U8(");
+        print("{}", mmioStore() ? std::string("\tPPC_MM_STORE_U8(") : store("U8"));
         if (insn.operands[2] != 0)
             print("{}.u32 + ", r(insn.operands[2]));
         println("{}, {}.u8);", int32_t(insn.operands[1]), r(insn.operands[0]));
@@ -1571,7 +1585,7 @@ bool Recompiler::Recompile(
 
     case PPC_INST_STBU:
         println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
-        println("\tPPC_STORE_U8({}, {}.u8);", ea(), r(insn.operands[0]));
+        println("{}{}, {}.u8);", store("U8"), ea(), r(insn.operands[0]));
         println("\t{}.u32 = {};", r(insn.operands[2]), ea());
         break;
 
@@ -1583,7 +1597,7 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_STD:
-        print("{}", mmioStore() ? "\tPPC_MM_STORE_U64(" : "\tPPC_STORE_U64(");
+        print("{}", mmioStore() ? std::string("\tPPC_MM_STORE_U64(") : store("U64"));
         if (insn.operands[2] != 0)
             print("{}.u32 + ", r(insn.operands[2]));
         println("{}, {}.u64);", int32_t(insn.operands[1]), r(insn.operands[0]));
@@ -1592,16 +1606,16 @@ bool Recompiler::Recompile(
     case PPC_INST_STDCX:
         println("\t{}.lt = 0;", cr(0));
         println("\t{}.gt = 0;", cr(0));
-        print("\t{}.eq = __sync_bool_compare_and_swap(reinterpret_cast<uint64_t*>(base + ", cr(0));
+        print("\t{}.eq = PPC_STORE_CONDITIONAL_U64(", cr(0));
         if (insn.operands[1] != 0)
             print("{}.u32 + ", r(insn.operands[1]));
-        println("{}.u32), {}.s64, __builtin_bswap64({}.s64));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
+        println("{}.u32, {}.s64, __builtin_bswap64({}.s64));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
         println("\t{}.so = {}.so;", cr(0), xer());
         break;
 
     case PPC_INST_STDU:
         println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
-        println("\tPPC_STORE_U64({}, {}.u64);", ea(), r(insn.operands[0]));
+        println("{}{}, {}.u64);", store("U64"), ea(), r(insn.operands[0]));
         println("\t{}.u32 = {};", r(insn.operands[2]), ea());
         break;
 
@@ -1614,7 +1628,7 @@ bool Recompiler::Recompile(
 
     case PPC_INST_STFD:
         printSetFlushMode(false);
-        print("{}", mmioStore() ? "\tPPC_MM_STORE_U64(" : "\tPPC_STORE_U64(");
+        print("{}", mmioStore() ? std::string("\tPPC_MM_STORE_U64(") : store("U64"));
         if (insn.operands[2] != 0)
             print("{}.u32 + ", r(insn.operands[2]));
         println("{}, {}.u64);", int32_t(insn.operands[1]), f(insn.operands[0]));
@@ -1639,7 +1653,7 @@ bool Recompiler::Recompile(
     case PPC_INST_STFS:
         printSetFlushMode(false);
         println("\t{}.f32 = float({}.f64);", temp(), f(insn.operands[0]));
-        print("{}", mmioStore() ? "\tPPC_MM_STORE_U32(" : "\tPPC_STORE_U32(");
+        print("{}", mmioStore() ? std::string("\tPPC_MM_STORE_U32(") : store("U32"));
         if (insn.operands[2] != 0)
             print("{}.u32 + ", r(insn.operands[2]));
         println("{}, {}.u32);", int32_t(insn.operands[1]), temp());
@@ -1655,7 +1669,7 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_STH:
-        print("{}", mmioStore() ? "\tPPC_MM_STORE_U16(" : "\tPPC_STORE_U16(");
+        print("{}", mmioStore() ? std::string("\tPPC_MM_STORE_U16(") : store("U16"));
         if (insn.operands[2] != 0)
             print("{}.u32 + ", r(insn.operands[2]));
         println("{}, {}.u16);", int32_t(insn.operands[1]), r(insn.operands[0]));
@@ -1735,14 +1749,14 @@ bool Recompiler::Recompile(
     case PPC_INST_STVX128:
     case PPC_INST_STVXL: // "last use" cache hint only
     case PPC_INST_STVXL128:
-        print("\tsimde_mm_store_si128((simde__m128i*)(base + ((");
+        print("\tPPC_STORE_V128((");
         if (insn.operands[1] != 0)
             print("{}.u32 + ", r(insn.operands[1]));
-        println("{}.u32) & ~0xF)), simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*)VectorMaskL)));", r(insn.operands[2]), v(insn.operands[0]));
+        println("{}.u32) & ~0xF, simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*)VectorMaskL)));", r(insn.operands[2]), v(insn.operands[0]));
         break;
 
     case PPC_INST_STW:
-        print("{}", mmioStore() ? "\tPPC_MM_STORE_U32(" : "\tPPC_STORE_U32(");
+        print("{}", mmioStore() ? std::string("\tPPC_MM_STORE_U32(") : store("U32"));
         if (insn.operands[2] != 0)
             print("{}.u32 + ", r(insn.operands[2]));
         println("{}, {}.u32);", int32_t(insn.operands[1]), r(insn.operands[0]));
@@ -1758,16 +1772,16 @@ bool Recompiler::Recompile(
     case PPC_INST_STWCX:
         println("\t{}.lt = 0;", cr(0));
         println("\t{}.gt = 0;", cr(0));
-        print("\t{}.eq = __sync_bool_compare_and_swap(reinterpret_cast<uint32_t*>(base + ", cr(0));
+        print("\t{}.eq = PPC_STORE_CONDITIONAL_U32(", cr(0));
         if (insn.operands[1] != 0)
             print("{}.u32 + ", r(insn.operands[1]));
-        println("{}.u32), {}.s32, __builtin_bswap32({}.s32));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
+        println("{}.u32, {}.s32, __builtin_bswap32({}.s32));", r(insn.operands[2]), reserved(), r(insn.operands[0]));
         println("\t{}.so = {}.so;", cr(0), xer());
         break;
 
     case PPC_INST_STWU:
         println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
-        println("\tPPC_STORE_U32({}, {}.u32);", ea(), r(insn.operands[0]));
+        println("{}{}, {}.u32);", store("U32"), ea(), r(insn.operands[0]));
         println("\t{}.u32 = {};", r(insn.operands[2]), ea());
         break;
 
@@ -2573,6 +2587,118 @@ bool Recompiler::Recompile(
     return true;
 }
 
+void Recompiler::GroupStores(const Function& fn, const std::unordered_set<size_t>& labels)
+{
+    storeGroups.clear();
+    groupedStores.clear();
+    if (!config.groupStores)
+        return;
+
+    // The runs under way, by base register: the first store's address, the bytes so far (offsets), and the stores.
+    struct Run
+    {
+        uint32_t first = 0;
+        int32_t low = 0, high = 0;
+        std::vector<uint32_t> stores;
+    };
+    std::unordered_map<uint32_t, Run> runs;
+    auto close = [&](uint32_t reg)
+        {
+            const auto it = runs.find(reg);
+            if (it == runs.end())
+                return;
+            if (it->second.stores.size() > 1)
+            {
+                storeGroups[it->second.first] = { reg, it->second.low, it->second.high, uint32_t(it->second.stores.size()) };
+                groupedStores.insert(it->second.stores.begin(), it->second.stores.end());
+            }
+            runs.erase(it);
+        };
+    auto closeAll = [&]()
+        {
+            std::vector<uint32_t> registers;
+            for (const auto& [reg, run] : runs)
+                registers.push_back(reg);
+            for (uint32_t reg : registers)
+                close(reg);
+        };
+
+    const uint32_t end = fn.base + fn.size;
+    const auto* data = (const uint32_t*)image.Find(fn.base);
+    ppc_insn insn;
+    for (uint32_t address = fn.base; address < end; address += 4, data++)
+    {
+        // Code reached from elsewhere may not have run the check.
+        if (labels.count(address) || config.midAsmHooks.count(address))
+            closeAll();
+        ppc::Disassemble(data, 4, address, insn);
+        const uint32_t word = ByteSwap(*data);
+        const uint32_t op = PPC_OP(word);
+        if (insn.opcode == nullptr || op == 16 || op == 17 || op == 18 || op == 19 || op == 3 || insn.opcode->id == PPC_INST_LMW ||
+            insn.opcode->id == PPC_INST_TW)
+        {
+            // Branches and calls (a call can yield to the frame boundary, which arms the pages again), traps, lmw.
+            closeAll();
+            continue;
+        }
+        int32_t size = 0;
+        bool update = false;
+        switch (insn.opcode->id)
+        {
+        case PPC_INST_STB: size = 1; break;
+        case PPC_INST_STBU: size = 1; update = true; break;
+        case PPC_INST_STH: size = 2; break;
+        case PPC_INST_STW: size = 4; break;
+        case PPC_INST_STWU: size = 4; update = true; break;
+        case PPC_INST_STD: size = 8; break;
+        case PPC_INST_STDU: size = 8; update = true; break;
+        case PPC_INST_STFS: size = 4; break;
+        case PPC_INST_STFD: size = 8; break;
+        default: break;
+        }
+        const bool mmio = address + 4 < end && *(data + 1) == c_eieio;
+        if (size && !mmio && insn.operands[2] != 0)
+        {
+            const uint32_t reg = insn.operands[2];
+            const int32_t offset = int32_t(insn.operands[1]);
+            auto it = runs.find(reg);
+            if (it != runs.end() && int64_t((std::max)(it->second.high, offset + size - 1)) - (std::min)(it->second.low, offset) < 4096)
+            {
+                it->second.low = (std::min)(it->second.low, offset);
+                it->second.high = (std::max)(it->second.high, offset + size - 1);
+                it->second.stores.push_back(address);
+            }
+            else
+            {
+                close(reg);
+                runs[reg] = { address, offset, offset + size - 1, { address } };
+            }
+            // An update form changes its base register after the store.
+            if (update)
+                close(reg);
+            continue;
+        }
+        // Any other instruction may write the register its first operand names (conservatively: for a store or a compare
+        // it's a source or a CR field), and updating loads and stores their base register.
+        switch (insn.opcode->id)
+        {
+        case PPC_INST_LBZU: case PPC_INST_LHZU: case PPC_INST_LHAU: case PPC_INST_LWZU: case PPC_INST_LDU:
+        case PPC_INST_LFSU: case PPC_INST_LFDU:
+            close(insn.operands[2]);
+            break;
+        case PPC_INST_LBZUX: case PPC_INST_LHZUX: case PPC_INST_LHAUX: case PPC_INST_LWZUX: case PPC_INST_LWAUX: case PPC_INST_LDUX:
+        case PPC_INST_LFSUX: case PPC_INST_LFDUX: case PPC_INST_STBUX: case PPC_INST_STHUX: case PPC_INST_STWUX: case PPC_INST_STDUX:
+        case PPC_INST_STFSUX: case PPC_INST_STFDUX:
+            close(insn.operands[1]);
+            break;
+        default:
+            break;
+        }
+        close(insn.operands[0]);
+    }
+    closeAll();
+}
+
 bool Recompiler::Recompile(const Function& fn)
 {
     auto base = fn.base;
@@ -2660,6 +2786,8 @@ bool Recompiler::Recompile(const Function& fn)
                 labels.emplace(midAsmHook->second.jumpAddressOnFalse);
         }
     }
+
+    GroupStores(fn, labels);
 
     auto symbol = image.symbols.find(fn.base);
     std::string name;

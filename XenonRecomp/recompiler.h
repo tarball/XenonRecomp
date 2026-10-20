@@ -66,5 +66,18 @@ struct Recompiler
 
     void Recompile(const std::filesystem::path& headerFilePath);
 
+    // group_stores, for the function being recompiled: the runs of stores off one base register that one check covers
+    // (by the address of the run's first store: the register and the run's lowest and highest byte, as offsets from it),
+    // and every store in such a run.
+    struct StoreGroup
+    {
+        uint32_t base = 0;
+        int32_t low = 0, high = 0;
+        uint32_t stores = 0;
+    };
+    std::unordered_map<uint32_t, StoreGroup> storeGroups;
+    std::unordered_set<uint32_t> groupedStores;
+    void GroupStores(const Function& fn, const std::unordered_set<size_t>& labels);
+
     void SaveCurrentOutData(const std::string_view& name = std::string_view());
 };
