@@ -5,6 +5,9 @@
 #error "ppc_config.h must be included before ppc_context.h"
 #endif
 
+// What the generated code uses from the standard library: std::atomic_thread_fence (sync, lwsync, eieio), INT_MAX and
+// INT_MIN, sqrt, std::fma, exp2f and log2f, setjmp and longjmp, the fixed-width integers and memset. A runtime can
+// compile it without the standard library, with headers of its own of these names declaring just that.
 #include <atomic>
 #include <climits>
 #include <cmath>
@@ -12,9 +15,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <memory>
-#include <mutex>
-#include <unordered_map>
 
 #include <x86/avx.h>
 #include <x86/sse.h>
@@ -173,8 +173,12 @@
 #endif
 
 // setjmp and longjmp use a host jmp_buf for the guest's buffer, kept on the host side: the host's is larger than the
-// guest's and needs 16-byte alignment, and the guest's buffer stays the guest's.
+// guest's and needs 16-byte alignment, and the guest's buffer stays the guest's. A runtime can keep the table itself.
 #ifndef PPC_JMP_BUF
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+
 inline jmp_buf& PPCHostJmpBuf(uint32_t guestBuffer)
 {
     struct Buffer
